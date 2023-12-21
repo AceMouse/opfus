@@ -313,7 +313,7 @@ main( int argc, char**  argv )
     if (error){
         fprintf(stdout, "error: FT_New_Face {%x}\n", error);
     } 
-    error = FT_Select_Charmap(face, FT_ENCODING_UTF8);
+    error = FT_Select_Charmap(face, FT_ENCODING_UNICODE);
     if (error){
         fprintf(stdout, "error: FT_Select_Charmap {%x}\n", error);
     } 
