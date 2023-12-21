@@ -1,7 +1,3 @@
-/*
- * BUGS: 
- *      top of imgs cut off, move pen to midle!
- */
 #include <stdio.h>
 #include <math.h>
 #include <stdint.h>
@@ -14,25 +10,20 @@
 #define WIDTH   PT*WIDTH_SCALE
 #define HEIGHT  PT 
 
-
 typedef struct OBS_char {
     FT_ULong charcode;
     unsigned char* image;
     struct OBS_char* match;
 } OBS_char;
 
-
-void
-update_max_dim( FT_Bitmap* bitmap, FT_Int x, FT_Int y, int* max_width, int* max_height)
-{
+void update_max_dim(FT_Bitmap* bitmap, 
+        FT_Int x, FT_Int y, int* max_width, int* max_height){
     FT_Int  i, j, p, q;
     FT_Int  x_max = x + bitmap->width;
     FT_Int  y_max = y + bitmap->rows;
-    for ( i = x, p = 0; i < x_max; i++, p++ )
-    {
-        for ( j = y, q = 0; j < y_max; j++, q++ )
-        {
-            if ( i < 0      || j < 0){
+    for ( i = x, p = 0; i < x_max; i++, p++ ){
+        for ( j = y, q = 0; j < y_max; j++, q++ ){
+            if ( i < 0 || j < 0){
                 continue;
             }
             if (bitmap->buffer[q * bitmap->width + p]){
@@ -46,140 +37,78 @@ update_max_dim( FT_Bitmap* bitmap, FT_Int x, FT_Int y, int* max_width, int* max_
         }
     }
 }
-void
-draw_bitmap( unsigned char* image, FT_Bitmap* bitmap, FT_Int x, FT_Int y, int img_width, int img_height)
-{
+void draw_bitmap(unsigned char* image, 
+        FT_Bitmap* bitmap, FT_Int x, FT_Int y, int img_width, int img_height){
     FT_Int  i, j, p, q;
     FT_Int  x_max = x + bitmap->width;
     FT_Int  y_max = y + bitmap->rows;
-
-
     /* for simplicity, we assume that `bitmap->pixel_mode' */
     /* is `FT_PIXEL_MODE_GRAY' (i.e., not a bitmap font)   */
-
-    for ( i = x, p = 0; i < x_max; i++, p++ )
-    {
-        for ( j = y, q = 0; j < y_max; j++, q++ )
-        {
-            if ( i < 0      || j < 0       ||
-                    i >= img_width || j >= img_height )
+    for (i = x, p = 0; i < x_max; i++, p++){
+        for (j = y, q = 0; j < y_max; j++, q++){
+            if (i < 0 || j < 0 || i >= img_width || j >= img_height){
                 continue;
-
+            }
             image[j*img_width+i] |= bitmap->buffer[q * bitmap->width + p];
         }
     }
 }
 
-void
-show_image( unsigned char* image, int width, int height)
-{
+void show_image( unsigned char* image, int width, int height){
     int  i, j;
-    for ( i = 0; i < height; i++ )
-    {
+    for ( i = 0; i < height; i++ ){
         for ( j = 0; j < width; j++ ){
             unsigned char v = *(image++);
-            putchar( v == 0 ? ' '
-                    : v < 128 ? '+'
-                    : '*' );
+            if (v == 0) {
+                putchar( ' ' );
+            }
+            else if (v < 128) {
+                putchar( '+' );
+            }
+            else {
+                putchar( '*' );
+            }
         }
         putchar( '\n' );
     }
 }
 
-void
-eraze_image( unsigned char* image, int height, int width)
-{
-    int  i, j;
-
-
-    for ( i = 0; i < height; i++ )
-    {
-        for ( j = 0; j < width; j++ ){
-            *(image++) = 0;
-        }
-    }
-}
-
 char s[5] = {0};
-char * to_unicode_string(FT_ULong charcode){
-    if (charcode < 0x80){
-        s[0] = charcode;
-        s[1] = 0;
+
+int len_UTF8(char c){
+    return ((c&0b10000000) == 0)*1
+         + ((c&0b11100000) == 0b11000000)*2 
+         + ((c&0b11110000) == 0b11100000)*3 
+         + ((c&0b11111000) == 0b11110000)*4; 
+}
+int len_charcode(unsigned long  charcode){
+    return 1
+         + (charcode >= 0x80) 
+         + (charcode >= 0x800) 
+         + (charcode >= 0x10000) 
+         + (charcode >= 0x110000)*(-10);
+}
+char * charcode_to_UTF8(unsigned long charcode){
+    int len = len_charcode(charcode);
+    int mask = 0b11111111>>len;
+    int first = len == 1 ? 0 : (0b111100000000>>len)&0b11111111;
+    s[0] = ((charcode>>(6*(len-1)))&mask)|first;
+    for (int i = len-1; i>0; i--){
+        s[len-i] = ((charcode>>(6*(i-1)))&0b00111111)|0b10000000;
     }
-    else if (charcode < 0x800){
-        s[0] = 0b11000000|(charcode>>6)&0b11111;
-        s[1] = 0b10000000|(charcode&0b111111);
-        s[2] = 0;
-    }    
-    else if (charcode < 0x10000){
-        s[0] = 0b11100000|(charcode>>12)&0b1111;
-        s[1] = 0b10000000|((charcode>>6)&0b111111);
-        s[2] = 0b10000000|(charcode&0b111111);
-        s[3] = 0;
-    }
-    else if (charcode <= 0x10FFFF){
-        s[0] = 0b11110000|(charcode>>18)&0b111;
-        s[1] = 0b10000000|((charcode>>12)&0b111111);
-        s[2] = 0b10000000|((charcode>>6)&0b111111);
-        s[3] = 0b10000000|(charcode&0b111111);
-        s[4] = 0;
-    } 
-    else {
-        return 0;
-    }
+    s[len] = '\0';
     return s;
 }
-int len_next_unicode(char *cstring){
-    int four = (((*cstring)>>3)&0b11111) == 0b11110;
-    int three = (((*cstring)>>4)&0b1111) == 0b1110;
-    int two = (((*cstring)>>5)&0b111) == 0b110;
-    int one = (((*cstring)>>7)&0b1) == 0;
-    if (four){
-        return 4;
-    }
-    if (three){
-        return 3;
-    }
-    if (two){
-        return 2;
-    }
-    if (one){
-        return 1;
-    }
-    return 0;
-}
-FT_ULong unicode_string_to_charcode(char *cstring){
-    FT_ULong result = 0;
-    int four = (((*cstring)>>3)&0b11111) == 0b11110;
-    int three = (((*cstring)>>4)&0b1111) == 0b1110;
-    int two = (((*cstring)>>5)&0b111) == 0b110;
-    int one = (((*cstring)>>7)&0b1) == 0;
-    if (four){
-        result = (((*cstring)&0b111) <<18) |  ((*(cstring+1)&0b111111)<<12) | ((*(cstring+2)&0b111111)<<6) | (*(cstring+3)&0b111111);
-    }
-    if (three){
-        result = (((*cstring)&0b1111) <<12) |  ((*(cstring+1)&0b111111)<<6) | (*(cstring+2)&0b111111);
-    }
-    if (two){
-        result = (((*cstring)&0b11111)<<6) | (*(cstring+1)&0b111111);
-    }
-    if (one){
-        result = *cstring;
+unsigned long UTF8_to_charcode(char *cstring){
+    unsigned long result = 0;
+    int len = len_UTF8(*cstring);
+    int mask = 0b11111111>>len;
+    result = (*cstring)&mask;
+    for (int i = 1; i< len; i++){
+        result<<=6;
+        result |= ((*(cstring+i))&0b00111111);
     }
     return result;
-}
-
-int img_sum_abs_diff(unsigned char* img1, unsigned char* img2, int width, int height){
-    int sum = 0;
-    for (int i = 0; i < width*height; i++){
-        int v1 = *img1;
-        int v2 = *img2;
-        int abs_diff = v1>v2? v1-v2 : v2-v1;
-        sum += abs_diff;
-        img1++;
-        img2++;
-    }
-    return sum;
 }
 
 int img_diff_overlap(unsigned char* img1, unsigned char* img2, int width, int height){
@@ -195,22 +124,25 @@ int img_diff_overlap(unsigned char* img1, unsigned char* img2, int width, int he
         int overlap = v1>0 && v2>0;
         int one = v1>0 ^ v2>0;
         int abs_diff = v1>v2? v1-v2 : v2-v1;
-        if (one){sum +=1/* v1+v2*/;}
-        if (overlap){sum -= 1/*300/(1+abs_diff)*/; has_overlap = 1;}
+        if (one){
+            sum +=1;
+        }
+        if (overlap){
+            sum -= 1; 
+            has_overlap = 1;
+        }
         img1++;
         img2++;
     }
-    //if (!has_overlap && sum1 != sum2){return 1000;}
     return sum;
 }
 int img_diff(unsigned char* img1, unsigned char* img2, int width, int height){
-    return img_diff_overlap(img1,img2, width, height);
+    return img_diff_overlap(img1, img2, width, height);
 }
 
 void print_overlap(unsigned char* img1, unsigned char* img2, int width, int height){
     int  i, j;
-    for ( i = 0; i < height; i++ )
-    {
+    for ( i = 0; i < height; i++ ){
         for ( j = 0; j < width; j++ ){
             int overlap = *(img1)>0 && *(img2)>0;
             int one = *(img1)>0 ^ *(img2)>0;
@@ -228,20 +160,19 @@ void print_overlap(unsigned char* img1, unsigned char* img2, int width, int heig
         }
         putchar( '\n' );
     }
-    
 }
 
-
-
-int is_control(FT_UInt charcode){
+int is_control(unsigned long charcode){
     //ranges from here:
     //https://www.aivosto.com/articles/control-characters.html
     int c0 = charcode < 0x20 || charcode == 0x7F;
     int c1 = 0x80 <= charcode && charcode <= 0x9F;
     int ISO8859 = charcode == 0xA0 || charcode == 0xAD;
-    return c0||c1||ISO8859;
+    return c0 || c1 || ISO8859;
 }
-int count_chars(FT_Face face, int* max_width, int* max_height, int* control_cnt, int* max_charcode){
+
+int count_chars(FT_Face face, int* max_width, 
+        int* max_height, int* control_cnt, int* max_charcode){
     FT_Error error;
     int cnt = 0;
     *control_cnt = 0;
@@ -268,83 +199,147 @@ int count_chars(FT_Face face, int* max_width, int* max_height, int* control_cnt,
         if (error){
             fprintf(stdout, "error: FT_Load_Glyph {%x}\n", error);
         } else {
-            update_max_dim( &face->glyph->bitmap, face->glyph->bitmap_left, 0, max_width, max_height);
+            update_max_dim(&face->glyph->bitmap, 
+                    face->glyph->bitmap_left, 0, max_width, max_height);
         }
         charcode = FT_Get_Next_Char(face, charcode, &gid);
         cnt ++;
     } 
     return cnt;
 }
+int count_UTF8(char* text){
+    int len = 0;
+    while (*text){
+        FT_ULong charcode = UTF8_to_charcode(text);
+        if (!is_control(charcode)){
+            len++;
+        }
+        text += len_UTF8(*text);
+    }
+    return len;
+}
+OBS_char** text_to_OBS(char* text, OBS_char ** charcode_to_character, int* len){
+    *len = count_UTF8(text);
+    OBS_char ** result = malloc(*len*sizeof(OBS_char*));
+
+    OBS_char ** r = result;
+    while(*text){
+        FT_ULong charcode = UTF8_to_charcode(text);
+        if (!is_control(charcode)){
+            *(r++) = charcode_to_character[charcode];
+        }
+        text += len_UTF8(*text);
+    }
+    return result;
+}
+
+char* OBS_to_text(OBS_char ** characters, int len){
+    int text_len = 0;
+    for (int i = 0; i<len; i++){
+        text_len += len_charcode(characters[i]->charcode);
+    }
+    char * text = malloc((text_len+1)*sizeof(char));
+    char * ch = text;
+    while (ch<(text+text_len)){
+        char * uni = charcode_to_UTF8((*characters++)->charcode);
+        while (*uni){
+            *ch++ = *uni++;
+        }
+    }
+    *ch = '\0';
+    return text;
+}
+
+char* OBS_to_match_text(OBS_char ** characters, int len){
+    int text_len = 0;
+    for (int i = 0; i<len; i++){
+        text_len += len_charcode(characters[i]->match->charcode);
+    }
+    char * text = malloc((text_len+1)*sizeof(char));
+    char * ch = text;
+    while (ch<(text+text_len)){
+        char * uni = charcode_to_UTF8((*characters++)->match->charcode);
+        while (*uni){
+            *ch++ = *uni++;
+        }
+    }
+    *ch = '\0';
+    return text;
+}
 int
 main( int argc, char**  argv )
 {
-    FT_Library    library;
-    FT_Face       face;
-
-    FT_GlyphSlot  slot;
-    FT_Matrix     matrix;                 /* transformation matrix */
-    FT_Vector     pen;                    /* untransformed origin  */
-    FT_Error      error;
-
-    char*         filename;
-    char*          text;
-
-    double        angle;
-    int           target_height;
-    int           n, num_chars;
-
-
-    if ( argc != 3 )
-    {
-        fprintf ( stderr, "usage: %s font text\n", argv[0] );
-        exit( 1 );
+    if ( argc != 4 ){
+        fprintf(stderr, "usage: %s font [t|f] text\n", argv[0]);
+        exit(1);
     }
 
-    filename      = argv[1];                           /* first argument     */
-    text          = argv[2];                           /* second argument    */
-    uint8_t * b = text;
-    while (*b){
-        fprintf(stdout, "\\c{%b}",*(b++));
+    char * input_font_filename = argv[1];                         
+    char t_or_f = argv[2][0];
+    char* text;
+    if (t_or_f == 't'){
+        text = argv[3];                         
+    } else if (t_or_f == 'f') {
+        long len;
+        FILE* f = fopen(argv[3], "rb");
+        if (f){
+            fseek(f, 0, SEEK_END);
+            len = ftell(f);
+            fseek (f, 0, SEEK_SET);
+            text = malloc(len+sizeof(char));
+            if (text){
+                fread(text, 1, len, f);
+                text[len] = '\0';
+            } 
+            else {
+                fprintf(stderr, "Failed to malloc\n");
+            }
+            fclose (f);
+        }
+    } else {
+        fprintf(stderr, "usage: %s font [t|f] text\n", argv[0]);
+        exit(1);
     }
-    fprintf(stdout, " = \\u{%b} = %s\n", unicode_string_to_charcode(text), text);
-    angle         = 0;// ( 25.0 / 360 ) * 3.14159 * 2;      /* use 25 degrees     */
-    target_height = HEIGHT;
 
-    error = FT_Init_FreeType( &library );              /* initialize library */
+    FT_Library library;
+    FT_Error error;
+    error = FT_Init_FreeType(&library);
     if (error){
         fprintf(stdout, "error: FT_Init_FreeType {%x}\n", error);
     } 
 
-    error = FT_New_Face( library, filename, 0, &face );/* create face object */
+    FT_Face face;
+    error = FT_New_Face( library, input_font_filename, 0, &face );
     if (error){
         fprintf(stdout, "error: FT_New_Face {%x}\n", error);
     } 
-    // Ensure an unicode characater map is loaded
-    error = FT_Select_Charmap(face, FT_ENCODING_UNICODE);
+    error = FT_Select_Charmap(face, FT_ENCODING_UTF8);
     if (error){
         fprintf(stdout, "error: FT_Select_Charmap {%x}\n", error);
     } 
-    error = FT_Set_Char_Size( face,  WIDTH * 64, HEIGHT * 64, 100, 0 );                /* set character size */
+    error = FT_Set_Char_Size( face,  WIDTH * 64, HEIGHT * 64, 100, 0 ); 
     if (error){
         fprintf(stdout, "error: FT_Set_Char_Size {%x}\n", error);
     } 
 
-    slot = face->glyph;
-
+    FT_Matrix matrix;
+    double angle = 0;
     matrix.xx = (FT_Fixed)( cos( angle ) * 0x10000L );
     matrix.xy = (FT_Fixed)(-sin( angle ) * 0x10000L );
     matrix.yx = (FT_Fixed)( sin( angle ) * 0x10000L );
     matrix.yy = (FT_Fixed)( cos( angle ) * 0x10000L );
 
-    
-    pen.x = 0;//WIDTH;
-    pen.y = 0;//( target_height - HEIGHT ) * 64;
+    FT_Vector pen;   
+    pen.x = 0;
+    pen.y = 0;
     FT_Set_Transform( face, &matrix, &pen );
 
     int img_width = 0;
     int img_height = 0;
     int control_cnt, max_charcode;
-    int non_control_cnt = count_chars(face, &img_width, &img_height, &control_cnt, &max_charcode);
+    int non_control_cnt = 
+        count_chars(face, &img_width, &img_height, &control_cnt, &max_charcode);
+
     fprintf(stdout, "non control glyphs: {%d}\n", non_control_cnt);
     fprintf(stdout, "control glyphs: {%d}\n", control_cnt);
     fprintf(stdout, "img width: {%d}\n", img_width);
@@ -364,8 +359,7 @@ main( int argc, char**  argv )
     int cnt=0;
     unsigned char* img = images;
     OBS_char* ch = characters;
-    while (gid != 0)
-    {
+    while (gid != 0){
         while (is_control(charcode)) {
             charcode = FT_Get_Next_Char(face, charcode, &gid);
             if (gid == 0) {
@@ -376,13 +370,12 @@ main( int argc, char**  argv )
             break;
         }
         ch->charcode = charcode;
-        //fprintf(stdout, "%s:\n",to_unicode_string(charcode));
         error = FT_Load_Glyph(face, gid, FT_LOAD_RENDER);
         if (error){
             fprintf(stdout, "error: FT_Load_Glyph {%x}\n", error);
         } else {
-            draw_bitmap(img, &face->glyph->bitmap, face->glyph->bitmap_left, 0, img_width, img_height );
-            //show_image(img, img_width, img_height);
+            draw_bitmap(img, &face->glyph->bitmap, 
+                    face->glyph->bitmap_left, 0, img_width, img_height );
             ch->image = img;
             ch->match = 0;
             img += img_width*img_height;
@@ -393,16 +386,12 @@ main( int argc, char**  argv )
         cnt++;
     } 
 
-    fprintf(stdout, text);
-    char * tt = text;
-    while (*tt){
-        int len = len_next_unicode(tt);
-        FT_ULong t = unicode_string_to_charcode(tt);
-        tt += len;
-        OBS_char* ch1 = charcode_to_character[t];
-        if (ch1==NULL){
-            fprintf(stdout, "Could not convert {%s:%x} to character\n", to_unicode_string(t), t );
-        }
+    int input_len;
+    OBS_char** input_characters = 
+        text_to_OBS(text, charcode_to_character, &input_len);
+
+    for (int i = 0; i< input_len; i++){
+        OBS_char* ch1 = input_characters[i];
         if (ch1->match != 0) {
             continue;
         }
@@ -421,38 +410,31 @@ main( int argc, char**  argv )
             }
             ch2++;
         }
-//        fprintf(stdout, "{%s, %x} <=> ",to_unicode_string(ch1->charcode),ch1->charcode);
-//        fprintf(stdout, "{%s, %x}:       (%d)\n",to_unicode_string(min_char->charcode),min_char->charcode, min_diff);
         ch1->match = min_char;
-        ch1++;
     }
-    tt = text;
-    while (*tt ){
-        int len = len_next_unicode(tt);
-        FT_ULong t = unicode_string_to_charcode(tt);
-        tt += len;
-        OBS_char* ch = charcode_to_character[t];
-        //show_image(ch->image, img_width, img_height);
-        //show_image(ch->match->image, img_width, img_height);
-        fprintf(stdout, "diff : {%d} {%d}\n", ch->charcode, ch->match->charcode);
+
+    for (int i = 0; i< input_len; i++){
+        OBS_char* ch = input_characters[i];
+        fprintf(stdout, "diff : {U+%04x} {U+%04x}\n", 
+                ch->charcode, ch->match->charcode);
         print_overlap(ch->image,ch->match->image, img_width, img_height);
     }
     fprintf(stdout,"\n");
-    tt = text;
-    fprintf(stdout, "%s => ", text);
-    while (*tt ){
-        int len = len_next_unicode(tt);
-        FT_ULong t = unicode_string_to_charcode(tt);
-        tt += len;
-        OBS_char* ch = charcode_to_character[t];
-        fprintf(stdout,"%s", to_unicode_string(ch->match->charcode));
+
+    for (int i = 0; i< input_len; i++){
+        OBS_char* ch = input_characters[i];
+        fprintf(stdout,"%s {U+%04x} => ", 
+                charcode_to_UTF8(ch->charcode), ch->charcode);
+        fprintf(stdout,"%s {U+%04x}\n", 
+                charcode_to_UTF8(ch->match->charcode), ch->match->charcode);
     }
     fprintf(stdout,"\n");
+    fprintf(stdout, "%s => %s\n", 
+            OBS_to_text(input_characters, input_len), 
+            OBS_to_match_text(input_characters, input_len));
 
-    FT_Done_Face    ( face );
-    FT_Done_FreeType( library );
+    FT_Done_Face(face);
+    FT_Done_FreeType(library);
 
     return 0;
 }
-
-/* EOF */
