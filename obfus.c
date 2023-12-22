@@ -1,6 +1,5 @@
 #include <stdio.h>
 #include <math.h>
-#include <stdint.h>
 
 #include <ft2build.h>
 #include FT_FREETYPE_H
@@ -165,7 +164,7 @@ void print_overlap(unsigned char* img1, unsigned char* img2, int width, int heig
 int is_control(unsigned long charcode){
     //ranges from here:
     //https://www.aivosto.com/articles/control-characters.html
-    int c0 = charcode < 0x20 || charcode == 0x7F;
+    int c0 = charcode <= 0x20 || charcode == 0x7F;
     int c1 = 0x80 <= charcode && charcode <= 0x9F;
     int ISO8859 = charcode == 0xA0 || charcode == 0xAD;
     return c0 || c1 || ISO8859;
@@ -188,6 +187,9 @@ int count_chars(FT_Face face, int* max_width,
         while (is_control(charcode)) {
             (*control_cnt)++;
             charcode = FT_Get_Next_Char(face, charcode, &gid);
+            if (*max_charcode < charcode){
+                *max_charcode = charcode;
+            }
             if (gid == 0) {
                 break;
             }
@@ -207,68 +209,83 @@ int count_chars(FT_Face face, int* max_width,
     } 
     return cnt;
 }
-int count_UTF8(char* text){
+
+int count_UTF8(char* text, 
+        OBS_char ** charcode_to_character, int * unknown_character_len){
     int len = 0;
+    *unknown_character_len = 0;
     while (*text){
         FT_ULong charcode = UTF8_to_charcode(text);
-        if (!is_control(charcode)){
-            len++;
+        len++;
+        if(!charcode_to_character[charcode]){
+            (*unknown_character_len)++;
         }
         text += len_UTF8(*text);
     }
     return len;
 }
-OBS_char** text_to_OBS(char* text, OBS_char ** charcode_to_character, int* len){
-    *len = count_UTF8(text);
-    OBS_char ** result = malloc(*len*sizeof(OBS_char*));
 
-    OBS_char ** r = result;
+void text_to_OBS(char* text, OBS_char** charcode_to_character, OBS_char** OBS, FT_ULong max_charcode){
     while(*text){
         FT_ULong charcode = UTF8_to_charcode(text);
-        if (!is_control(charcode)){
-            *(r++) = charcode_to_character[charcode];
+        if (charcode <= max_charcode){
+            *(OBS++) = charcode_to_character[charcode];
+        } else {
+            *(OBS++) = 0;
         }
         text += len_UTF8(*text);
     }
-    return result;
 }
 
-char* OBS_to_text(OBS_char ** characters, int len){
+int OBS_to_UTF8_len(OBS_char** characters, int len){
     int text_len = 0;
     for (int i = 0; i<len; i++){
-        text_len += len_charcode(characters[i]->charcode);
-    }
-    char * text = malloc((text_len+1)*sizeof(char));
-    char * ch = text;
-    while (ch<(text+text_len)){
-        char * uni = charcode_to_UTF8((*characters++)->charcode);
-        while (*uni){
-            *ch++ = *uni++;
+        if (characters[i]){
+            text_len += len_charcode(characters[i]->charcode);
         }
     }
-    *ch = '\0';
-    return text;
+    return text_len;
 }
 
-char* OBS_to_match_text(OBS_char ** characters, int len){
+int OBS_to_UTF8_match_len(OBS_char** characters, int len){
     int text_len = 0;
     for (int i = 0; i<len; i++){
-        text_len += len_charcode(characters[i]->match->charcode);
-    }
-    char * text = malloc((text_len+1)*sizeof(char));
-    char * ch = text;
-    while (ch<(text+text_len)){
-        char * uni = charcode_to_UTF8((*characters++)->match->charcode);
-        while (*uni){
-            *ch++ = *uni++;
+        if (characters[i] && characters[i]->match){
+            text_len += len_charcode(characters[i]->match->charcode);
         }
     }
-    *ch = '\0';
-    return text;
+    return text_len;
 }
-int
-main( int argc, char**  argv )
-{
+
+void OBS_to_text(OBS_char** characters, int text_len, char* text){
+    char * ch = text;
+    while (ch<(text+text_len)){
+        if (*characters){
+            char * uni = charcode_to_UTF8((*characters)->charcode);
+            while (*uni){
+                *ch++ = *uni++;
+            }
+        }
+        characters++;
+    }
+    *ch = '\0';
+}
+
+void OBS_to_match_text(OBS_char** characters, int text_len, char* text){
+    char * ch = text;
+    while (ch<(text+text_len)){
+        if (*characters && (*characters)->match){
+            char * uni = charcode_to_UTF8((*characters)->match->charcode);
+            while (*uni){
+                *ch++ = *uni++;
+            }
+        }
+        characters++;
+    }
+    *ch = '\0';
+}
+
+int main( int argc, char**  argv ){
     if ( argc != 4 ){
         fprintf(stderr, "usage: %s font [t|f] text\n", argv[0]);
         exit(1);
@@ -286,15 +303,19 @@ main( int argc, char**  argv )
             fseek(f, 0, SEEK_END);
             len = ftell(f);
             fseek (f, 0, SEEK_SET);
-            text = malloc(len+sizeof(char));
+            text = calloc(len+1,sizeof(char));
             if (text){
                 fread(text, 1, len, f);
                 text[len] = '\0';
             } 
             else {
-                fprintf(stderr, "Failed to malloc\n");
+                fprintf(stderr, "Failed to calloc\n");
             }
             fclose (f);
+            fprintf(stdout, text);
+        }
+        else {
+            fprintf(stdout, "could not open file: {%s}", argv[3]);
         }
     } else {
         fprintf(stderr, "usage: %s font [t|f] text\n", argv[0]);
@@ -346,21 +367,31 @@ main( int argc, char**  argv )
     fprintf(stdout, "img height: {%d}\n", img_height);
     fprintf(stdout, "max charcode: {%d}\n", max_charcode);
     
-    int to_alloc = non_control_cnt*img_width*img_height*sizeof(unsigned char);
-    unsigned char* images = malloc(to_alloc);
+    int to_alloc = non_control_cnt*img_width*img_height;
+    unsigned char* images = calloc(to_alloc,sizeof(unsigned char));
     if (images == NULL){
-        fprintf(stderr, "Malloc fault, to alloc {%d}", to_alloc);
+        fprintf(stderr, "calloc fault, images");
     }
-    OBS_char* characters = malloc(non_control_cnt*sizeof(OBS_char));
-    OBS_char** charcode_to_character = malloc((max_charcode+1)*sizeof(OBS_char*));
+    OBS_char* characters = calloc((non_control_cnt+control_cnt),sizeof(OBS_char));
+    if (characters == NULL){
+        fprintf(stderr, "calloc fault, characters");
+    }
+    OBS_char** charcode_to_character = calloc((max_charcode+1),sizeof(OBS_char*));
+    if (charcode_to_character == NULL){
+        fprintf(stderr, "calloc fault, charcode_to_character");
+    }
 
     FT_UInt gid;
     FT_ULong charcode = FT_Get_First_Char(face, &gid);
-    int cnt=0;
     unsigned char* img = images;
     OBS_char* ch = characters;
     while (gid != 0){
         while (is_control(charcode)) {
+            ch->charcode = charcode;
+            ch->image = 0;
+            ch->match = ch;
+            charcode_to_character[charcode] = ch;
+            ch++;
             charcode = FT_Get_Next_Char(face, charcode, &gid);
             if (gid == 0) {
                 break;
@@ -383,23 +414,30 @@ main( int argc, char**  argv )
         charcode_to_character[charcode] = ch;
         ch++;
         charcode = FT_Get_Next_Char(face, charcode, &gid);
-        cnt++;
     } 
 
-    int input_len;
-    OBS_char** input_characters = 
-        text_to_OBS(text, charcode_to_character, &input_len);
+    int unknown_character_len;
+    int input_len = count_UTF8(text, charcode_to_character, &unknown_character_len);
+    fprintf(stdout, "unknown_character_len : {%d}\n", unknown_character_len);
+    OBS_char ** input_characters = 
+        calloc((input_len),sizeof(OBS_char*));
+
+    text_to_OBS(text, charcode_to_character, input_characters, max_charcode);
 
     for (int i = 0; i< input_len; i++){
         OBS_char* ch1 = input_characters[i];
+        if (ch1 == NULL){
+            continue;
+        }
         if (ch1->match != 0) {
             continue;
         }
+        fprintf(stdout, "%06d: U+%04x\n",i,ch1->charcode);
         int min_diff = 1000000;
         OBS_char* min_char = 0;
         OBS_char* ch2 = characters;
         while (ch2 < (characters+non_control_cnt)){
-            if (ch1->charcode == ch2->charcode){
+            if (is_control(ch2->charcode) || ch1->charcode == ch2->charcode){
                 ch2++;
                 continue;
             }
@@ -415,23 +453,36 @@ main( int argc, char**  argv )
 
     for (int i = 0; i< input_len; i++){
         OBS_char* ch = input_characters[i];
+        if (!ch) {
+            continue;
+        }
         fprintf(stdout, "diff : {U+%04x} {U+%04x}\n", 
                 ch->charcode, ch->match->charcode);
+        if (is_control(ch->charcode) || is_control(ch->match->charcode)){
+            continue;
+        }
         print_overlap(ch->image,ch->match->image, img_width, img_height);
     }
     fprintf(stdout,"\n");
 
     for (int i = 0; i< input_len; i++){
         OBS_char* ch = input_characters[i];
+        if (!ch) {
+            continue;
+        }
         fprintf(stdout,"%s {U+%04x} => ", 
                 charcode_to_UTF8(ch->charcode), ch->charcode);
         fprintf(stdout,"%s {U+%04x}\n", 
                 charcode_to_UTF8(ch->match->charcode), ch->match->charcode);
     }
     fprintf(stdout,"\n");
-    fprintf(stdout, "%s => %s\n", 
-            OBS_to_text(input_characters, input_len), 
-            OBS_to_match_text(input_characters, input_len));
+    int match_text_len = OBS_to_UTF8_match_len(input_characters, input_len);
+    char* match_text = calloc(match_text_len,sizeof(char)); 
+    if (!match_text){
+        fprintf(stdout, "calloc error, match_text");
+    }
+    OBS_to_match_text(input_characters, match_text_len, match_text);
+    fprintf(stdout, "%s => %s\n", text, match_text);
 
     FT_Done_Face(face);
     FT_Done_FreeType(library);
