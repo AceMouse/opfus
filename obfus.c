@@ -1,18 +1,28 @@
 #include <stdio.h>
+#include <stdlib.h>
 #include <math.h>
+#include <stdint.h>
+#include <time.h>
 
 #include <ft2build.h>
 #include FT_FREETYPE_H
 
 #define PT 14
 #define WIDTH_SCALE 1 
-#define WIDTH   PT*WIDTH_SCALE
-#define HEIGHT  PT 
+#define WIDTH PT*WIDTH_SCALE
+#define HEIGHT PT 
+
+
+typedef struct OBS_match {
+    FT_ULong charcode;
+    int score;
+} OBS_match;
 
 typedef struct OBS_char {
     FT_ULong charcode;
     unsigned char* image;
-    struct OBS_char* match;
+    int match_count;
+    struct OBS_match* matches;
 } OBS_char;
 
 void update_max_dim(FT_Bitmap* bitmap, 
@@ -53,6 +63,21 @@ void draw_bitmap(unsigned char* image,
     }
 }
 
+int is_empty(unsigned char* image, int width, int height){
+    int i;
+    for (i = 0; i < height*width; i++){
+        if (*(image++) != 0) {
+            return 0;
+        }
+    }
+    return 1;
+}
+void eraze_image(unsigned char* image, int width, int height){
+    int i;
+    for (i = 0; i < height*width; i++){
+        *(image++) = 0;
+    }
+}
 void show_image( unsigned char* image, int width, int height){
     int  i, j;
     for ( i = 0; i < height; i++ ){
@@ -80,14 +105,14 @@ int len_UTF8(char c){
          + ((c&0b11110000) == 0b11100000)*3 
          + ((c&0b11111000) == 0b11110000)*4; 
 }
-int len_charcode(unsigned long  charcode){
+int len_charcode(uint32_t charcode){
     return 1
          + (charcode >= 0x80) 
          + (charcode >= 0x800) 
          + (charcode >= 0x10000) 
          + (charcode >= 0x110000)*(-10);
 }
-char * charcode_to_UTF8(unsigned long charcode){
+char * charcode_to_UTF8(uint32_t charcode){
     int len = len_charcode(charcode);
     int mask = 0b11111111>>len;
     int first = len == 1 ? 0 : (0b111100000000>>len)&0b11111111;
@@ -98,8 +123,8 @@ char * charcode_to_UTF8(unsigned long charcode){
     s[len] = '\0';
     return s;
 }
-unsigned long UTF8_to_charcode(char *cstring){
-    unsigned long result = 0;
+uint32_t UTF8_to_charcode(char *cstring){
+    uint32_t result = 0;
     int len = len_UTF8(*cstring);
     int mask = 0b11111111>>len;
     result = (*cstring)&mask;
@@ -110,9 +135,71 @@ unsigned long UTF8_to_charcode(char *cstring){
     return result;
 }
 
+int is_control(uint32_t charcode){
+    //ranges from here:
+    //https://www.aivosto.com/articles/control-characters.html
+    int c0 = charcode <= 0x20 || charcode == 0x7F;
+    int c1 = 0x80 <= charcode && charcode <= 0x9F;
+    int ISO8859 = charcode == 0xA0 || charcode == 0xAD;
+    return c0 || c1 || ISO8859;
+}
+
+int count_UTF8(char* text){
+    int len = 0;
+    while (*text){
+        len++;
+        text += len_UTF8(*text);
+    }
+    return len;
+}
+
+uint32_t max_UTF8(char* text){
+    uint32_t max = 0;
+    while(*text){
+        int len = len_UTF8(*text);
+        uint32_t tmp = UTF8_to_charcode(text);
+        if (tmp>max){
+            max = tmp;
+        }
+        text += len;
+    }
+    return max;
+}
+
+uint32_t* text_to_unique_charcodes(char *text, int* len){
+    uint32_t max = max_UTF8(text);
+    uint8_t* set = calloc(max+1, sizeof(uint8_t));
+    *len = 0; 
+    while (*text){
+        int l = len_UTF8(*text);
+        uint32_t charcode = UTF8_to_charcode(text);
+        *len += (set[charcode]&1)^1;
+        set[charcode] |= 1;
+        text += l;
+    }
+    uint32_t* charcodes = malloc(*len*sizeof(uint32_t));
+    uint32_t* ch = charcodes;
+    for (uint32_t i = 0; i<max+1; i++){
+        if (set[i]){
+            *(ch++) = i; 
+        }
+    }
+    free(set);
+    return charcodes;
+}
+
+int text_UTF8_len(char* text){
+    int utf_len = 0;
+    while(*text){
+        int len = len_UTF8(*text);
+        text += len;
+        utf_len++;
+    }
+    return utf_len;
+}
+
 int img_diff_overlap(unsigned char* img1, unsigned char* img2, int width, int height){
     int sum = 0;
-    int has_overlap = 0;
     int sum1 = 0;
     int sum2 = 0;
     for (int i = 0; i < width*height; i++){
@@ -120,15 +207,13 @@ int img_diff_overlap(unsigned char* img1, unsigned char* img2, int width, int he
         int v2 = *img2;
         sum1 += v1;
         sum2 += v2;
-        int overlap = v1>0 && v2>0;
-        int one = v1>0 ^ v2>0;
-        int abs_diff = v1>v2? v1-v2 : v2-v1;
+        int overlap = (v1>0) && (v2>0);
+        int one = (v1>0) ^ (v2>0);
         if (one){
             sum +=1;
         }
         if (overlap){
             sum -= 1; 
-            has_overlap = 1;
         }
         img1++;
         img2++;
@@ -143,8 +228,8 @@ void print_overlap(unsigned char* img1, unsigned char* img2, int width, int heig
     int  i, j;
     for ( i = 0; i < height; i++ ){
         for ( j = 0; j < width; j++ ){
-            int overlap = *(img1)>0 && *(img2)>0;
-            int one = *(img1)>0 ^ *(img2)>0;
+            int overlap = (*(img1)>0) && (*(img2)>0);
+            int one = (*(img1)>0) ^ (*(img2)>0);
             if (overlap) {
                 putchar( 'O' );
             }
@@ -161,14 +246,6 @@ void print_overlap(unsigned char* img1, unsigned char* img2, int width, int heig
     }
 }
 
-int is_control(unsigned long charcode){
-    //ranges from here:
-    //https://www.aivosto.com/articles/control-characters.html
-    int c0 = charcode <= 0x20 || charcode == 0x7F;
-    int c1 = 0x80 <= charcode && charcode <= 0x9F;
-    int ISO8859 = charcode == 0xA0 || charcode == 0xAD;
-    return c0 || c1 || ISO8859;
-}
 
 int count_chars(FT_Face face, int* max_width, 
         int* max_height, int* control_cnt, int* max_charcode){
@@ -210,88 +287,54 @@ int count_chars(FT_Face face, int* max_width,
     return cnt;
 }
 
-int count_UTF8(char* text, 
-        OBS_char ** charcode_to_character, int * unknown_character_len){
-    int len = 0;
-    *unknown_character_len = 0;
-    while (*text){
-        FT_ULong charcode = UTF8_to_charcode(text);
-        len++;
-        if(!charcode_to_character[charcode]){
-            (*unknown_character_len)++;
-        }
-        text += len_UTF8(*text);
-    }
-    return len;
+
+int match_compare(const void *a, const void *b) {
+    return (((OBS_match *)a)->score - ((OBS_match *)b)->score);
 }
 
-void text_to_OBS(char* text, OBS_char** charcode_to_character, OBS_char** OBS, FT_ULong max_charcode){
+
+
+char* obscure(char* text, OBS_char* unique_input_OBS, 
+        int unique_count, int32_t max_input_charcode, int difficulty){
+    int max_out_len = text_UTF8_len(text)*4;
+    char* out = calloc(max_out_len+1, sizeof(char));
+    char* o = out;
     while(*text){
-        FT_ULong charcode = UTF8_to_charcode(text);
-        if (charcode <= max_charcode){
-            *(OBS++) = charcode_to_character[charcode];
-        } else {
-            *(OBS++) = 0;
-        }
-        text += len_UTF8(*text);
-    }
-}
-
-int OBS_to_UTF8_len(OBS_char** characters, int len){
-    int text_len = 0;
-    for (int i = 0; i<len; i++){
-        if (characters[i]){
-            text_len += len_charcode(characters[i]->charcode);
-        }
-    }
-    return text_len;
-}
-
-int OBS_to_UTF8_match_len(OBS_char** characters, int len){
-    int text_len = 0;
-    for (int i = 0; i<len; i++){
-        if (characters[i] && characters[i]->match){
-            text_len += len_charcode(characters[i]->match->charcode);
-        }
-    }
-    return text_len;
-}
-
-void OBS_to_text(OBS_char** characters, int text_len, char* text){
-    char * ch = text;
-    while (ch<(text+text_len)){
-        if (*characters){
-            char * uni = charcode_to_UTF8((*characters)->charcode);
-            while (*uni){
-                *ch++ = *uni++;
+        int next_len = len_UTF8(*text);
+        int32_t charcode = UTF8_to_charcode(text);
+        int idx = 0;
+        for(int i = 0; i<unique_count; i++){
+            if (unique_input_OBS[i].charcode == charcode){
+                idx = i;
+                break;
             }
         }
-        characters++;
-    }
-    *ch = '\0';
-}
-
-void OBS_to_match_text(OBS_char** characters, int text_len, char* text){
-    char * ch = text;
-    while (ch<(text+text_len)){
-        if (*characters && (*characters)->match){
-            char * uni = charcode_to_UTF8((*characters)->match->charcode);
-            while (*uni){
-                *ch++ = *uni++;
+        uint32_t match = charcode;
+        if (unique_input_OBS[idx].matches){
+            int worst_allowed_index = unique_input_OBS[idx].match_count*difficulty/100;
+            int best_allowed_index = 1;
+            if (best_allowed_index <= worst_allowed_index){
+                int index = (rand()%(worst_allowed_index+1-best_allowed_index))+best_allowed_index;
+                match = unique_input_OBS[idx].matches[index].charcode;
             }
         }
-        characters++;
+        char* s = charcode_to_UTF8(match);
+        while(*s){
+            *(o++) = *(s++);
+        }
+        text += next_len;
     }
-    *ch = '\0';
+    return out;
 }
 
-int main( int argc, char**  argv ){
-    if ( argc != 4 ){
-        fprintf(stderr, "usage: %s font [t|f] text\n", argv[0]);
+int main(int argc, char** argv){
+    if (argc != 4){
+        fprintf(stderr, "usage: %s font t text\n"
+                        "       %s font f file-path\n", argv[0], argv[0]);
         exit(1);
     }
 
-    char * input_font_filename = argv[1];                         
+    char * actual_font_filename = argv[1];                         
     char t_or_f = argv[2][0];
     char* text;
     if (t_or_f == 't'){
@@ -321,7 +364,7 @@ int main( int argc, char**  argv ){
         fprintf(stderr, "usage: %s font [t|f] text\n", argv[0]);
         exit(1);
     }
-
+    srand(time(0));
     FT_Library library;
     FT_Error error;
     error = FT_Init_FreeType(&library);
@@ -329,16 +372,17 @@ int main( int argc, char**  argv ){
         fprintf(stdout, "error: FT_Init_FreeType {%x}\n", error);
     } 
 
-    FT_Face face;
-    error = FT_New_Face( library, input_font_filename, 0, &face );
+    FT_Face actual_face;
+    error = FT_New_Face(library, actual_font_filename, 0, &actual_face );
     if (error){
         fprintf(stdout, "error: FT_New_Face {%x}\n", error);
     } 
-    error = FT_Select_Charmap(face, FT_ENCODING_UNICODE);
+    FT_Face mimic_face = actual_face;
+    error = FT_Select_Charmap(actual_face, FT_ENCODING_UNICODE);
     if (error){
         fprintf(stdout, "error: FT_Select_Charmap {%x}\n", error);
     } 
-    error = FT_Set_Char_Size( face,  WIDTH * 64, HEIGHT * 64, 100, 0 ); 
+    error = FT_Set_Char_Size(actual_face,  WIDTH * 64, HEIGHT * 64, 100, 0); 
     if (error){
         fprintf(stdout, "error: FT_Set_Char_Size {%x}\n", error);
     } 
@@ -353,139 +397,103 @@ int main( int argc, char**  argv ){
     FT_Vector pen;   
     pen.x = 0;
     pen.y = 0;
-    FT_Set_Transform( face, &matrix, &pen );
-
+    FT_Set_Transform(mimic_face, &matrix, &pen);
     int img_width = 0;
     int img_height = 0;
-    int control_cnt, max_charcode;
+    int max_input_charcode = max_UTF8(text);
+    int max_charcode = max_input_charcode;
+    int control_cnt;
     int non_control_cnt = 
-        count_chars(face, &img_width, &img_height, &control_cnt, &max_charcode);
+        count_chars(actual_face, &img_width, &img_height, &control_cnt, &max_charcode);
 
+    /*fprintf(stdout, "max charcode in input: {%d}\n", max_input_charcode);
+    fprintf(stdout, "max charcode in font & input: {%d}\n", max_charcode);
     fprintf(stdout, "non control glyphs: {%d}\n", non_control_cnt);
     fprintf(stdout, "control glyphs: {%d}\n", control_cnt);
     fprintf(stdout, "img width: {%d}\n", img_width);
-    fprintf(stdout, "img height: {%d}\n", img_height);
-    fprintf(stdout, "max charcode: {%d}\n", max_charcode);
-    
-    int to_alloc = non_control_cnt*img_width*img_height;
+    fprintf(stdout, "img height: {%d}\n", img_height);*/ 
+
+    int unique_count;
+    uint32_t* unique_input_charcodes = text_to_unique_charcodes(text, &unique_count);
+    OBS_char* unique_input_OBS = calloc(unique_count, sizeof(OBS_char));
+    OBS_char* obs = unique_input_OBS;
+
+    int to_alloc = (unique_count+1)*img_width*img_height;
     unsigned char* images = calloc(to_alloc,sizeof(unsigned char));
-    if (images == NULL){
-        fprintf(stderr, "calloc fault, images");
-    }
-    OBS_char* characters = calloc((non_control_cnt+control_cnt),sizeof(OBS_char));
-    if (characters == NULL){
-        fprintf(stderr, "calloc fault, characters");
-    }
-    OBS_char** charcode_to_character = calloc((max_charcode+1),sizeof(OBS_char*));
-    if (charcode_to_character == NULL){
-        fprintf(stderr, "calloc fault, charcode_to_character");
+    unsigned char* img = images;
+
+    for(int i = 0; i < unique_count; i++){
+        //fprintf(stdout, "%d\n", i);
+        obs->charcode = unique_input_charcodes[i];
+        error = FT_Load_Char(mimic_face, unique_input_charcodes[i], FT_LOAD_RENDER);
+        if (error){
+            fprintf(stdout, "error: FT_Load_Glyph {%x} could not load glyph {U+%04lx}\n", error, obs->charcode);
+            obs++;
+            continue;
+        }
+        if (mimic_face->glyph->bitmap.rows != 0){
+            obs->image = img;
+            draw_bitmap(img, &mimic_face->glyph->bitmap, 
+                        mimic_face->glyph->bitmap_left, 0, img_width, img_height);
+            obs->matches = calloc((non_control_cnt+control_cnt),sizeof(OBS_match));
+            obs->matches += non_control_cnt+control_cnt-1; // grow backwards;
+            img += img_width*img_height;
+        }
+        obs++;
     }
 
     FT_UInt gid;
-    FT_ULong charcode = FT_Get_First_Char(face, &gid);
-    unsigned char* img = images;
-    OBS_char* ch = characters;
+    FT_ULong charcode = FT_Get_First_Char(actual_face, &gid);
     while (gid != 0){
-        while (is_control(charcode)) {
-            ch->charcode = charcode;
-            ch->image = 0;
-            ch->match = ch;
-            charcode_to_character[charcode] = ch;
-            ch++;
-            charcode = FT_Get_Next_Char(face, charcode, &gid);
-            if (gid == 0) {
-                break;
-            }
-        }
-        if (gid == 0) {
-            break;
-        }
-        ch->charcode = charcode;
-        error = FT_Load_Glyph(face, gid, FT_LOAD_RENDER);
+        //fprintf(stdout, "{U+%04x}\n", charcode);
+        error = FT_Load_Glyph(actual_face, gid, FT_LOAD_RENDER);
         if (error){
             fprintf(stdout, "error: FT_Load_Glyph {%x}\n", error);
-        } else {
-            draw_bitmap(img, &face->glyph->bitmap, 
-                    face->glyph->bitmap_left, 0, img_width, img_height );
-            ch->image = img;
-            ch->match = 0;
-            img += img_width*img_height;
-        }
-        charcode_to_character[charcode] = ch;
-        ch++;
-        charcode = FT_Get_Next_Char(face, charcode, &gid);
-    } 
-
-    int unknown_character_len;
-    int input_len = count_UTF8(text, charcode_to_character, &unknown_character_len);
-    fprintf(stdout, "unknown_character_len : {%d}\n", unknown_character_len);
-    OBS_char ** input_characters = 
-        calloc((input_len),sizeof(OBS_char*));
-
-    text_to_OBS(text, charcode_to_character, input_characters, max_charcode);
-
-    for (int i = 0; i< input_len; i++){
-        OBS_char* ch1 = input_characters[i];
-        if (ch1 == NULL){
+            charcode = FT_Get_Next_Char(actual_face, charcode, &gid);
             continue;
         }
-        if (ch1->match != 0) {
+
+        if (actual_face->glyph->bitmap.rows == 0){
+            charcode = FT_Get_Next_Char(actual_face, charcode, &gid);
             continue;
         }
-        fprintf(stdout, "%06d: U+%04x\n",i,ch1->charcode);
+
+        eraze_image(img, img_width, img_height);// reuse +1 slot in images 
+        draw_bitmap(img, &actual_face->glyph->bitmap, 
+                actual_face->glyph->bitmap_left, 0, img_width, img_height);
+
         int min_diff = 1000000;
-        OBS_char* min_char = 0;
-        OBS_char* ch2 = characters;
-        while (ch2 < (characters+non_control_cnt)){
-            if (is_control(ch2->charcode) || ch1->charcode == ch2->charcode){
-                ch2++;
+        int min_i = 0;
+        for(int i = 0; i < unique_count; i++){
+            obs = &unique_input_OBS[i];
+            if (obs->image == NULL || obs->matches == NULL){
                 continue;
             }
-            int diff = img_diff(ch1->image,ch2->image, img_width, img_width);
+            int diff = img_diff(obs->image, img, img_width, img_width);
             if (diff<min_diff){
                 min_diff = diff;
-                min_char = ch2;
+                min_i = i;
             }
-            ch2++;
         }
-        ch1->match = min_char;
+        unique_input_OBS[min_i].matches->charcode = charcode;
+        unique_input_OBS[min_i].matches->score = min_diff;
+        unique_input_OBS[min_i].match_count++;
+        unique_input_OBS[min_i].matches--;
+
+        charcode = FT_Get_Next_Char(actual_face, charcode, &gid);
     }
 
-    for (int i = 0; i< input_len; i++){
-        OBS_char* ch = input_characters[i];
-        if (!ch) {
+    for(int i = 0; i < unique_count; i++){
+        if (unique_input_OBS[i].matches == NULL){
             continue;
         }
-        fprintf(stdout, "diff : {U+%04x} {U+%04x}\n", 
-                ch->charcode, ch->match->charcode);
-        if (is_control(ch->charcode) || is_control(ch->match->charcode)){
-            continue;
-        }
-        print_overlap(ch->image,ch->match->image, img_width, img_height);
+        qsort(unique_input_OBS[i].matches, unique_input_OBS[i].match_count,
+                sizeof(OBS_match), match_compare);
     }
-    fprintf(stdout,"\n");
-
-    for (int i = 0; i< input_len; i++){
-        OBS_char* ch = input_characters[i];
-        if (!ch) {
-            continue;
-        }
-        fprintf(stdout,"%s {U+%04x} => ", 
-                charcode_to_UTF8(ch->charcode), ch->charcode);
-        fprintf(stdout,"%s {U+%04x}\n", 
-                charcode_to_UTF8(ch->match->charcode), ch->match->charcode);
+    fprintf(stdout, "%s ->\n", text);
+    for(int i = 1; i < 100; i*=2){
+        char* obscured = obscure(text, unique_input_OBS, unique_count, max_input_charcode, i);
+        fprintf(stdout, "%s\n", obscured);
     }
-    fprintf(stdout,"\n");
-    int match_text_len = OBS_to_UTF8_match_len(input_characters, input_len);
-    char* match_text = calloc(match_text_len,sizeof(char)); 
-    if (!match_text){
-        fprintf(stdout, "calloc error, match_text");
-    }
-    OBS_to_match_text(input_characters, match_text_len, match_text);
-    fprintf(stdout, "%s => %s\n", text, match_text);
-
-    FT_Done_Face(face);
-    FT_Done_FreeType(library);
-
     return 0;
 }
